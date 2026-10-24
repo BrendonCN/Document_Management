@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Document Management{% endblock %}
+{% block body_class %}login-page{% endblock %}
+{% block body %}
+<main class="login-shell">
+  <section class="login-panel">
+    <p class="brand">Document Management</p>
+    <h1>Sign in</h1>
+    <p class="lede">Local SSO stub — pick a seeded user or create a demo account. Swap <code>AuthProvider</code> for OIDC later.</p>
+    {% if error %}
+    <p class="error-banner">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="/login" class="login-form">
+      <label>
+        Username
+        <select name="username" id="username">
+          {% for u in users %}
+          <option value="{{ u }}">{{ u }}</option>
+          {% endfor %}
+          <option value="__custom">Custom…</option>
+        </select>
+      </label>
+      <label id="custom-user-wrap" class="hidden">
+        Custom username
+        <input type="text" name="display_custom" id="custom-username" placeholder="newuser" />
+      </label>
+      <label>
+        Role (optional override)
+        <select name="role">
+          <option value="">Keep user role</option>
+          <option value="admin">admin</option>
+          <option value="editor">editor</option>
+          <option value="viewer">viewer</option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" name="create_if_missing" />
+        Create user if missing
+      </label>
+      <input type="hidden" name="display_name" id="display_name" value="" />
+      <button type="submit" class="btn primary">Continue</button>
+    </form>
+  </section>
+</main>
+<script>
+  const sel = document.getElementById('username');
+  const wrap = document.getElementById('custom-user-wrap');
+  const custom = document.getElementById('custom-username');
+  const form = document.querySelector('.login-form');
+  sel.addEventListener('change', () => {
+    const isCustom = sel.value === '__custom';
+    wrap.classList.toggle('hidden', !isCustom);
+  });
+  form.addEventListener('submit', () => {
+    if (sel.value === '__custom') {
+      const name = (custom.value || '').trim();
+      sel.insertAdjacentHTML('beforeend', `<option value="${name}" selected>${name}</option>`);
+      sel.value = name;
+      document.getElementById('display_name').value = name;
+    }
+  });
+</script>
+{% endblock %}

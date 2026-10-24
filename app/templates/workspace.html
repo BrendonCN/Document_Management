@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Workspace · Document Management{% endblock %}
+{% block body_class %}workspace-page{% endblock %}
+{% block body %}
+<div id="app" class="app-shell"
+     data-role="{{ user.role }}"
+     data-can-mutate="{{ 'true' if can_mutate else 'false' }}"
+     data-is-admin="{{ 'true' if is_admin else 'false' }}"
+     data-username="{{ user.username }}"
+     data-display-name="{{ user.display_name }}">
+
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <button type="button" id="sidebar-toggle" class="icon-btn" title="Collapse sidebar" aria-label="Collapse sidebar">☰</button>
+      <span class="brand-mark">Docs</span>
+      <div class="sidebar-actions">
+        {% if can_mutate %}
+        <button type="button" id="btn-new" class="icon-btn" title="New node">＋</button>
+        {% endif %}
+      </div>
+    </div>
+    <div class="sidebar-search">
+      <input type="search" id="tree-search" placeholder="Search tree…" autocomplete="off" />
+    </div>
+    <div id="tree" class="tree" role="tree"></div>
+  </aside>
+
+  <div class="main-column">
+    <header class="toolbar" id="toolbar">
+      <div class="toolbar-left">
+        <input type="text" id="doc-name" class="doc-name" placeholder="Select a document" {% if not can_mutate %}readonly{% endif %} />
+        <span id="doc-kind" class="kind-badge"></span>
+      </div>
+      <div class="toolbar-center" id="format-bar">
+        <!-- format controls injected by editor -->
+      </div>
+      <div class="toolbar-right">
+        <div class="version-controls">
+          <button type="button" id="ver-prev" class="icon-btn" title="Previous version" disabled>◀</button>
+          <input type="text" id="ver-label" class="ver-label" {% if not can_mutate %}readonly{% endif %} />
+          <input type="datetime-local" id="ver-date" class="ver-date" {% if not can_mutate %}readonly{% endif %} />
+          <button type="button" id="ver-next" class="icon-btn" title="Next version" disabled>▶</button>
+        </div>
+        {% if can_mutate %}
+        <button type="button" id="btn-copy-ver" class="btn ghost" title="Copy version">Copy</button>
+        <button type="button" id="btn-import" class="btn ghost">Import</button>
+        <button type="button" id="btn-delete" class="btn danger ghost">Delete</button>
+        {% endif %}
+        <button type="button" id="btn-export" class="btn ghost">Export</button>
+        <button type="button" id="btn-history" class="btn ghost">History</button>
+        <div class="view-modes" role="group" aria-label="View mode">
+          <button type="button" data-mode="normal" class="mode-btn active">Normal</button>
+          <button type="button" data-mode="split" class="mode-btn">Split/diff</button>
+          <button type="button" data-mode="md_render" class="mode-btn">MD Rendering</button>
+        </div>
+        <div class="user-block">
+          <span class="user-name">{{ user.display_name }} <em>({{ user.role }})</em></span>
+          {% if is_admin %}
+          <a href="/admin/users" class="btn ghost small">Users</a>
+          {% endif %}
+          <a href="/logout" class="btn ghost small">Logout</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="canvas" class="canvas">
+      <div id="empty-state" class="empty-state">
+        <p class="brand">Document Management</p>
+        <p>Select a node in the sidebar, or create a new document.</p>
+      </div>
+      <div id="editor-host" class="editor-host hidden"></div>
+      <div id="diff-host" class="diff-host hidden"></div>
+    </main>
+  </div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" id="modal-form">
+      <h2 id="modal-title">Dialog</h2>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button type="submit" value="cancel" class="btn ghost">Cancel</button>
+        <button type="submit" value="confirm" class="btn primary" id="modal-confirm">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="file-import" class="hidden" />
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/tree.js"></script>
+<script src="/static/js/editors.js"></script>
+<script src="/static/js/diff.js"></script>
+<script src="/static/js/app.js"></script>
+{% endblock %}

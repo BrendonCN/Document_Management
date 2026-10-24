@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Users · Document Management{% endblock %}
+{% block body_class %}admin-page{% endblock %}
+{% block body %}
+<header class="admin-bar">
+  <a href="/" class="btn ghost">← Workspace</a>
+  <p class="brand">Document Management</p>
+  <span>{{ user.display_name }} (admin)</span>
+</header>
+<main class="admin-main">
+  <h1>User management</h1>
+  <p class="lede">Create users and change roles. Seeded accounts: admin, editor, viewer.</p>
+
+  <form id="create-user" class="user-form">
+    <input name="username" placeholder="username" required />
+    <input name="display_name" placeholder="Display name" required />
+    <select name="role">
+      <option value="viewer">viewer</option>
+      <option value="editor">editor</option>
+      <option value="admin">admin</option>
+    </select>
+    <button type="submit" class="btn primary">Add user</button>
+  </form>
+
+  <table class="user-table" id="user-table">
+    <thead>
+      <tr><th>Username</th><th>Display</th><th>Role</th><th>Active</th><th>Last login</th><th></th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/api.js"></script>
+<script src="/static/js/admin.js"></script>
+{% endblock %}
