@@ -1,105 +1,160 @@
 from __future__ import annotations
 
+import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import (
-    Boolean,
-    DateTime,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
-
-
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    role: Mapped[str] = mapped_column(String(16), nullable=False, default="viewer")
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-    sessions: Mapped[list[SessionRecord]] = relationship(back_populates="user")
-    nodes_created: Mapped[list[Node]] = relationship(back_populates="creator")
+def parse_dt(value: datetime | str | None) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    if " " in text and "T" not in text:
+        text = text.replace(" ", "T", 1)
+    return datetime.fromisoformat(text)
 
 
-class SessionRecord(Base):
-    __tablename__ = "sessions"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-
-    user: Mapped[User] = relationship(back_populates="sessions")
+def format_dt(value: datetime | None) -> Optional[str]:
+    if value is None:
+        return None
+    return value.isoformat(sep=" ")
 
 
-class Node(Base):
-    __tablename__ = "nodes"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    parent_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True, index=True
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="folder")
-    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
-    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
-    parent: Mapped[Optional[Node]] = relationship(
-        remote_side="Node.id", back_populates="children"
-    )
-    children: Mapped[list[Node]] = relationship(
-        back_populates="parent", cascade="all, delete-orphan"
-    )
-    creator: Mapped[Optional[User]] = relationship(back_populates="nodes_created")
-    versions: Mapped[list[Version]] = relationship(
-        back_populates="node", cascade="all, delete-orphan", order_by="Version.ordinal"
-    )
+def parse_bool(value: bool | int | str | None) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes"}
 
 
-class Version(Base):
-    __tablename__ = "versions"
-    __table_args__ = (UniqueConstraint("node_id", "ordinal", name="uq_node_ordinal"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    node_id: Mapped[int] = mapped_column(
-        ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    version_label: Mapped[str] = mapped_column(String(64), nullable=False, default="v 0.0.1")
-    version_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    filename: Mapped[str] = mapped_column(String(255), nullable=False, default="content")
-    content_type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-
-    node: Mapped[Node] = relationship(back_populates="versions")
-    creator: Mapped[Optional[User]] = relationship()
+def format_bool(value: bool) -> int:
+    return 1 if value else 0
 
 
-class AuditEvent(Base):
-    __tablename__ = "audit_events"
+@dataclass
+class User:
+    id: int
+    username: str
+    display_name: str
+    role: str
+    last_login_at: Optional[datetime]
+    is_active: bool
+    created_at: datetime
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-    username: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    action: Mapped[str] = mapped_column(String(64), nullable=False)
-    node_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    path_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> User:
+        return cls(
+            id=row["id"],
+            username=row["username"],
+            display_name=row["display_name"],
+            role=row["role"],
+            last_login_at=parse_dt(row["last_login_at"]),
+            is_active=parse_bool(row["is_active"]),
+            created_at=parse_dt(row["created_at"]) or datetime.utcnow(),
+        )
+
+
+@dataclass
+class SessionRecord:
+    id: str
+    user_id: int
+    created_at: datetime
+    expires_at: datetime
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> SessionRecord:
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            created_at=parse_dt(row["created_at"]) or datetime.utcnow(),
+            expires_at=parse_dt(row["expires_at"]) or datetime.utcnow(),
+        )
+
+
+@dataclass
+class Node:
+    id: int
+    parent_id: Optional[int]
+    name: str
+    kind: str
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+    sort_order: int
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Node:
+        return cls(
+            id=row["id"],
+            parent_id=row["parent_id"],
+            name=row["name"],
+            kind=row["kind"],
+            created_by=row["created_by"],
+            created_at=parse_dt(row["created_at"]) or datetime.utcnow(),
+            updated_at=parse_dt(row["updated_at"]) or datetime.utcnow(),
+            sort_order=row["sort_order"],
+        )
+
+
+@dataclass
+class Version:
+    id: int
+    node_id: int
+    version_label: str
+    version_date: datetime
+    storage_path: str
+    created_by: Optional[int]
+    created_at: datetime
+    ordinal: int
+    filename: str
+    content_type: Optional[str]
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Version:
+        return cls(
+            id=row["id"],
+            node_id=row["node_id"],
+            version_label=row["version_label"],
+            version_date=parse_dt(row["version_date"]) or datetime.utcnow(),
+            storage_path=row["storage_path"],
+            created_by=row["created_by"],
+            created_at=parse_dt(row["created_at"]) or datetime.utcnow(),
+            ordinal=row["ordinal"],
+            filename=row["filename"],
+            content_type=row["content_type"],
+        )
+
+
+@dataclass
+class AuditEvent:
+    id: int
+    user_id: Optional[int]
+    username: str
+    action: str
+    node_id: Optional[int]
+    path_snapshot: str
+    detail_json: str
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> AuditEvent:
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            username=row["username"],
+            action=row["action"],
+            node_id=row["node_id"],
+            path_snapshot=row["path_snapshot"],
+            detail_json=row["detail_json"],
+            created_at=parse_dt(row["created_at"]) or datetime.utcnow(),
+        )

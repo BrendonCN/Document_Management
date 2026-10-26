@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
+import sqlite3
 
-from app.db import Base, SessionLocal, engine
-from app.models import User
+from app import repo
+from app.db import connect, init_schema
 from app.services.tree import create_node
 
 
@@ -14,20 +14,24 @@ SEED_USERS = [
 ]
 
 
-def seed_users(db: Session) -> None:
+def seed_users(db: sqlite3.Connection) -> None:
     for spec in SEED_USERS:
-        existing = db.query(User).filter(User.username == spec["username"]).first()
+        existing = repo.get_user_by_username(db, spec["username"])
         if existing is None:
-            db.add(User(**spec, is_active=True))
+            repo.insert_user(
+                db,
+                username=spec["username"],
+                display_name=spec["display_name"],
+                role=spec["role"],
+                is_active=True,
+            )
     db.commit()
 
 
-def seed_sample_tree(db: Session) -> None:
-    from app.models import Node
-
-    if db.query(Node).count() > 0:
+def seed_sample_tree(db: sqlite3.Connection) -> None:
+    if repo.count_nodes(db) > 0:
         return
-    admin = db.query(User).filter(User.username == "admin").first()
+    admin = repo.get_user_by_username(db, "admin")
     if not admin:
         return
 
@@ -40,8 +44,8 @@ def seed_sample_tree(db: Session) -> None:
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+    init_schema()
+    db = connect()
     try:
         seed_users(db)
         seed_sample_tree(db)

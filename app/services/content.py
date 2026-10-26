@@ -3,10 +3,10 @@ from __future__ import annotations
 import difflib
 import io
 import json
+import sqlite3
 from typing import Any, Optional
 
-from sqlalchemy.orm import Session
-
+from app import repo
 from app.models import Node, User, Version
 from app.services import storage
 from app.services.audit import record_audit
@@ -97,7 +97,7 @@ def _html_to_docx(html: str) -> bytes:
 
 
 def save_text_content(
-    db: Session,
+    db: sqlite3.Connection,
     node: Node,
     version: Version,
     user: User,
@@ -127,8 +127,7 @@ def save_text_content(
         detail={"version_id": target.id, "new_version": create_new_version},
     )
     db.commit()
-    db.refresh(target)
-    return target
+    return repo.get_version(db, target.id) or target
 
 
 def load_spreadsheet(version: Version) -> dict[str, list[list[Any]]]:
@@ -151,7 +150,7 @@ def load_spreadsheet(version: Version) -> dict[str, list[list[Any]]]:
 
 
 def save_spreadsheet(
-    db: Session,
+    db: sqlite3.Connection,
     node: Node,
     version: Version,
     user: User,
@@ -188,8 +187,7 @@ def save_spreadsheet(
         detail={"version_id": target.id, "kind": "xlsx"},
     )
     db.commit()
-    db.refresh(target)
-    return target
+    return repo.get_version(db, target.id) or target
 
 
 def text_for_diff(version: Version, kind: str) -> str:
@@ -241,7 +239,7 @@ def compute_diff(left: Version, right: Version, kind: str) -> dict[str, Any]:
 
 
 def apply_diff_line(
-    db: Session,
+    db: sqlite3.Connection,
     node: Node,
     left: Version,
     right: Version,

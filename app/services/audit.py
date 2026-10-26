@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any, Optional
 
-from sqlalchemy.orm import Session
-
+from app import repo
 from app.models import AuditEvent, Node, User
 
 
-def node_path(db: Session, node: Optional[Node]) -> str:
+def node_path(db: sqlite3.Connection, node: Optional[Node]) -> str:
     if node is None:
         return "/"
     parts: list[str] = []
@@ -19,19 +19,20 @@ def node_path(db: Session, node: Optional[Node]) -> str:
         parts.append(current.name)
         if current.parent_id is None:
             break
-        current = db.get(Node, current.parent_id)
+        current = repo.get_node(db, current.parent_id)
     return "/" + "/".join(reversed(parts))
 
 
 def record_audit(
-    db: Session,
+    db: sqlite3.Connection,
     *,
     user: Optional[User],
     action: str,
     node: Optional[Node] = None,
     detail: Optional[dict[str, Any]] = None,
 ) -> AuditEvent:
-    event = AuditEvent(
+    return repo.insert_audit(
+        db,
         user_id=user.id if user else None,
         username=user.username if user else "system",
         action=action,
@@ -39,6 +40,3 @@ def record_audit(
         path_snapshot=node_path(db, node),
         detail_json=json.dumps(detail or {}, default=str),
     )
-    db.add(event)
-    db.flush()
-    return event

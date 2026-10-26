@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Callable, Optional
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
 
 from app.auth.provider import get_auth_provider
 from app.db import get_db
@@ -11,7 +11,7 @@ from app.models import User
 
 
 def get_current_user(
-    request: Request, db: Session = Depends(get_db)
+    request: Request, db: sqlite3.Connection = Depends(get_db)
 ) -> Optional[User]:
     session_id = request.cookies.get("dm_session")
     return get_auth_provider().resolve_user(db, session_id)

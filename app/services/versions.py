@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from typing import BinaryIO, Optional
 
-from sqlalchemy.orm import Session
-
+from app import repo
 from app.models import Node, User, Version
 from app.services import storage
 from app.services.audit import record_audit
@@ -31,13 +31,8 @@ KIND_CONTENT_TYPE = {
 }
 
 
-def next_ordinal(db: Session, node_id: int) -> int:
-    last = (
-        db.query(Version)
-        .filter(Version.node_id == node_id)
-        .order_by(Version.ordinal.desc())
-        .first()
-    )
+def next_ordinal(db: sqlite3.Connection, node_id: int) -> int:
+    last = repo.get_latest_version(db, node_id)
     return (last.ordinal + 1) if last else 1
 
 
@@ -50,7 +45,7 @@ def default_label(ordinal: int) -> str:
 
 
 def create_empty_version(
-    db: Session,
+    db: sqlite3.Connection,
     node: Node,
     user: Optional[User],
     *,
@@ -60,25 +55,24 @@ def create_empty_version(
 ) -> Version:
     ordinal = next_ordinal(db, node.id)
     fname = filename or KIND_DEFAULT_FILENAME.get(node.kind, "content")
-    version = Version(
+    version = repo.insert_version(
+        db,
         node_id=node.id,
         version_label=label or default_label(ordinal),
         version_date=datetime.utcnow(),
-        storage_path="",  # set after flush
+        storage_path="",
         created_by=user.id if user else None,
         ordinal=ordinal,
         filename=fname,
         content_type=KIND_CONTENT_TYPE.get(node.kind),
     )
-    db.add(version)
-    db.flush()
 
     data = initial_bytes
     if data is None:
         data = _default_bytes(node.kind)
     rel = storage.write_bytes(node.id, version.id, fname, data)
+    repo.update_version_storage(db, version.id, rel)
     version.storage_path = rel
-    db.flush()
     return version
 
 
@@ -119,7 +113,7 @@ def _default_bytes(kind: str) -> bytes:
 
 
 def copy_version(
-    db: Session,
+    db: sqlite3.Connection,
     node: Node,
     source: Version,
     user: Optional[User],
@@ -127,7 +121,8 @@ def copy_version(
     label: Optional[str] = None,
 ) -> Version:
     ordinal = next_ordinal(db, node.id)
-    version = Version(
+    version = repo.insert_version(
+        db,
         node_id=node.id,
         version_label=label or default_label(ordinal),
         version_date=datetime.utcnow(),
@@ -137,13 +132,11 @@ def copy_version(
         filename=source.filename,
         content_type=source.content_type,
     )
-    db.add(version)
-    db.flush()
     rel = storage.copy_version_files(
         source.node_id, source.id, node.id, version.id, source.filename
     )
+    repo.update_version_storage(db, version.id, rel)
     version.storage_path = rel
-    db.flush()
     record_audit(
         db,
         user=user,
@@ -155,7 +148,7 @@ def copy_version(
 
 
 def import_file(
-    db: Session,
+    db: sqlite3.Connection,
     node: Node,
     user: Optional[User],
     *,
@@ -166,7 +159,8 @@ def import_file(
 ) -> Version:
     ordinal = next_ordinal(db, node.id)
     safe_name = Path_safe(filename)
-    version = Version(
+    version = repo.insert_version(
+        db,
         node_id=node.id,
         version_label=label or default_label(ordinal),
         version_date=datetime.utcnow(),
@@ -176,11 +170,9 @@ def import_file(
         filename=safe_name,
         content_type=content_type or KIND_CONTENT_TYPE.get(node.kind),
     )
-    db.add(version)
-    db.flush()
     rel = storage.write_stream(node.id, version.id, safe_name, stream)
+    repo.update_version_storage(db, version.id, rel)
     version.storage_path = rel
-    db.flush()
     record_audit(
         db,
         user=user,
@@ -195,26 +187,16 @@ def Path_safe(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_").strip() or "content"
 
 
-def get_current_version(db: Session, node_id: int) -> Optional[Version]:
-    return (
-        db.query(Version)
-        .filter(Version.node_id == node_id)
-        .order_by(Version.ordinal.desc())
-        .first()
-    )
+def get_current_version(db: sqlite3.Connection, node_id: int) -> Optional[Version]:
+    return repo.get_latest_version(db, node_id)
 
 
-def list_versions(db: Session, node_id: int) -> list[Version]:
-    return (
-        db.query(Version)
-        .filter(Version.node_id == node_id)
-        .order_by(Version.ordinal.asc())
-        .all()
-    )
+def list_versions(db: sqlite3.Connection, node_id: int) -> list[Version]:
+    return repo.list_versions(db, node_id)
 
 
 def neighbor_versions(
-    db: Session, version: Version
+    db: sqlite3.Connection, version: Version
 ) -> tuple[Optional[Version], Optional[Version]]:
     versions = list_versions(db, version.node_id)
     idx = next((i for i, v in enumerate(versions) if v.id == version.id), None)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+import sqlite3
 
+from fastapi import APIRouter, Depends, HTTPException
+
+from app import repo
 from app.auth.deps import require_roles
 from app.db import get_db
 from app.models import User
@@ -14,28 +16,28 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("", response_model=list[UserOut])
 def list_users(
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_roles("admin")),
 ):
-    return db.query(User).order_by(User.username.asc()).all()
+    return repo.list_users(db)
 
 
 @router.post("", response_model=UserOut)
 def create_user(
     payload: UserCreate,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     admin: User = Depends(require_roles("admin")),
 ):
     username = payload.username.strip().lower()
-    if db.query(User).filter(User.username == username).first():
+    if repo.get_user_by_username(db, username):
         raise HTTPException(status_code=400, detail="Username already exists")
-    user = User(
+    user = repo.insert_user(
+        db,
         username=username,
         display_name=payload.display_name.strip(),
         role=payload.role,
         is_active=True,
     )
-    db.add(user)
     record_audit(
         db,
         user=admin,
@@ -43,18 +45,17 @@ def create_user(
         detail={"username": username, "role": payload.role},
     )
     db.commit()
-    db.refresh(user)
-    return user
+    return repo.get_user(db, user.id) or user
 
 
 @router.patch("/{user_id}", response_model=UserOut)
 def update_user(
     user_id: int,
     payload: UserUpdate,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     admin: User = Depends(require_roles("admin")),
 ):
-    user = db.get(User, user_id)
+    user = repo.get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if payload.display_name is not None:
@@ -63,6 +64,7 @@ def update_user(
         user.role = payload.role
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    repo.update_user(db, user)
     record_audit(
         db,
         user=admin,
@@ -70,17 +72,16 @@ def update_user(
         detail={"user_id": user_id, **payload.model_dump(exclude_none=True)},
     )
     db.commit()
-    db.refresh(user)
-    return user
+    return repo.get_user(db, user.id) or user
 
 
 @router.delete("/{user_id}", response_model=Message)
 def delete_user(
     user_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     admin: User = Depends(require_roles("admin")),
 ):
-    user = db.get(User, user_id)
+    user = repo.get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == admin.id:
@@ -91,6 +92,6 @@ def delete_user(
         action="user.delete",
         detail={"user_id": user_id, "username": user.username},
     )
-    db.delete(user)
+    repo.delete_user(db, user_id)
     db.commit()
     return Message(message="User deleted")

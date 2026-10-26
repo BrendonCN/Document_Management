@@ -11,7 +11,7 @@ A server-rendered document management web app with a collapsible tree sidebar, v
 | Jinja2 | 3.1.6 |
 | Pydantic | 2.13.4 |
 
-SQLite lives at `data/app.db`. Version blobs are stored under `data/storage/{node_id}/{version_id}/`.
+SQLite lives at `data/app.db` and is accessed with the Python standard library (`sqlite3`). No extra database library is required. Version blobs are stored under `data/storage/{node_id}/{version_id}/`.
 
 ## Quick start
 
@@ -56,7 +56,7 @@ Sign in via the local SSO stub (pick a user / optional role override). The `Auth
 app/
   main.py          # FastAPI app + Jinja pages
   config.py
-  db.py / models.py / schemas.py / seed.py
+  db.py / models.py / repo.py / schemas.py / seed.py
   auth/            # AuthProvider + stub + RBAC deps
   api/             # JSON routes under /api/...
   services/        # tree, versions, storage, content, audit

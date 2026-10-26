@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user, require_user
 from app.auth.provider import get_auth_provider
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=UserOut)
-def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, response: Response, db: sqlite3.Connection = Depends(get_db)):
     try:
         user, session_id = get_auth_provider().login(
             db,
@@ -40,7 +41,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
 def logout(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_user),
 ):
     _ = user

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+import sqlite3
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app import repo
 from app.auth.deps import require_roles, require_user
 from app.db import get_db
-from app.models import Node, User
+from app.models import User
 from app.schemas import Message, NodeCreate, NodeMove, NodeOut, NodeUpdate, TreeNodeOut
 from app.services import tree as tree_svc
 
@@ -14,7 +16,7 @@ router = APIRouter(prefix="/nodes", tags=["nodes"])
 
 @router.get("/tree", response_model=list[TreeNodeOut])
 def get_tree(
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
     return tree_svc.build_tree(db)
@@ -23,7 +25,7 @@ def get_tree(
 @router.get("/search", response_model=list[NodeOut])
 def search(
     q: str = Query(..., min_length=1),
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
     return tree_svc.search_nodes(db, q)
@@ -32,10 +34,10 @@ def search(
 @router.get("/{node_id}", response_model=NodeOut)
 def get_node(
     node_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
-    node = db.get(Node, node_id)
+    node = repo.get_node(db, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     return tree_svc.node_to_out(db, node)
@@ -44,7 +46,7 @@ def get_node(
 @router.post("", response_model=NodeOut)
 def create_node(
     payload: NodeCreate,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
     try:
@@ -64,10 +66,10 @@ def create_node(
 def update_node(
     node_id: int,
     payload: NodeUpdate,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    node = db.get(Node, node_id)
+    node = repo.get_node(db, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     try:
@@ -90,10 +92,10 @@ def update_node(
 def move_node(
     node_id: int,
     payload: NodeMove,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    node = db.get(Node, node_id)
+    node = repo.get_node(db, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     try:
@@ -108,10 +110,10 @@ def move_node(
 @router.delete("/{node_id}", response_model=Message)
 def delete_node(
     node_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    node = db.get(Node, node_id)
+    node = repo.get_node(db, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     tree_svc.delete_node(db, user, node)

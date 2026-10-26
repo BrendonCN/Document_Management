@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
 from typing import Optional
 
-from sqlalchemy.orm import Session
-
+from app import repo
 from app.config import SESSION_MAX_AGE
-from app.models import SessionRecord, User
+from app.models import User
 
 
 class AuthProvider(ABC):
@@ -17,7 +17,7 @@ class AuthProvider(ABC):
     @abstractmethod
     def login(
         self,
-        db: Session,
+        db: sqlite3.Connection,
         *,
         username: str,
         role: Optional[str] = None,
@@ -27,11 +27,11 @@ class AuthProvider(ABC):
         """Authenticate and return (user, session_id)."""
 
     @abstractmethod
-    def logout(self, db: Session, session_id: str) -> None:
+    def logout(self, db: sqlite3.Connection, session_id: str) -> None:
         ...
 
     @abstractmethod
-    def resolve_user(self, db: Session, session_id: Optional[str]) -> Optional[User]:
+    def resolve_user(self, db: sqlite3.Connection, session_id: Optional[str]) -> Optional[User]:
         ...
 
 
@@ -40,7 +40,7 @@ class StubAuthProvider(AuthProvider):
 
     def login(
         self,
-        db: Session,
+        db: sqlite3.Connection,
         *,
         username: str,
         role: Optional[str] = None,
@@ -51,18 +51,17 @@ class StubAuthProvider(AuthProvider):
         if not username:
             raise ValueError("Username is required")
 
-        user = db.query(User).filter(User.username == username).first()
+        user = repo.get_user_by_username(db, username)
         if user is None:
             if not create_if_missing:
                 raise ValueError(f"Unknown user: {username}")
-            user = User(
+            user = repo.insert_user(
+                db,
                 username=username,
                 display_name=display_name or username.title(),
                 role=role or "viewer",
                 is_active=True,
             )
-            db.add(user)
-            db.flush()
         else:
             if role and role in {"admin", "editor", "viewer"}:
                 user.role = role
@@ -73,34 +72,34 @@ class StubAuthProvider(AuthProvider):
             raise ValueError("User is inactive")
 
         user.last_login_at = datetime.utcnow()
+        repo.update_user(db, user)
         session_id = token_urlsafe(32)
-        record = SessionRecord(
-            id=session_id,
+        repo.insert_session(
+            db,
+            session_id=session_id,
             user_id=user.id,
             expires_at=datetime.utcnow() + timedelta(seconds=SESSION_MAX_AGE),
         )
-        db.add(record)
         db.commit()
-        db.refresh(user)
-        return user, session_id
+        return repo.get_user(db, user.id) or user, session_id
 
-    def logout(self, db: Session, session_id: str) -> None:
-        record = db.get(SessionRecord, session_id)
+    def logout(self, db: sqlite3.Connection, session_id: str) -> None:
+        record = repo.get_session(db, session_id)
         if record:
-            db.delete(record)
+            repo.delete_session(db, session_id)
             db.commit()
 
-    def resolve_user(self, db: Session, session_id: Optional[str]) -> Optional[User]:
+    def resolve_user(self, db: sqlite3.Connection, session_id: Optional[str]) -> Optional[User]:
         if not session_id:
             return None
-        record = db.get(SessionRecord, session_id)
+        record = repo.get_session(db, session_id)
         if not record:
             return None
         if record.expires_at < datetime.utcnow():
-            db.delete(record)
+            repo.delete_session(db, session_id)
             db.commit()
             return None
-        user = db.get(User, record.user_id)
+        user = repo.get_user(db, record.user_id)
         if not user or not user.is_active:
             return None
         return user

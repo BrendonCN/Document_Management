@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
 
+from app import repo
 from app.auth.deps import require_roles, require_user
 from app.db import get_db
-from app.models import Node, User, Version
+from app.models import User
 from app.schemas import Message, VersionCreate, VersionMetaUpdate, VersionOut
 from app.services import storage
 from app.services.audit import record_audit
@@ -24,10 +26,10 @@ router = APIRouter(tags=["versions"])
 @router.get("/nodes/{node_id}/versions", response_model=list[VersionOut])
 def get_versions(
     node_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
-    if not db.get(Node, node_id):
+    if not repo.get_node(db, node_id):
         raise HTTPException(status_code=404, detail="Node not found")
     return list_versions(db, node_id)
 
@@ -35,10 +37,10 @@ def get_versions(
 @router.get("/versions/{version_id}", response_model=VersionOut)
 def get_version(
     version_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
-    version = db.get(Version, version_id)
+    version = repo.get_version(db, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
     return version
@@ -47,10 +49,10 @@ def get_version(
 @router.get("/versions/{version_id}/neighbors")
 def get_neighbors(
     version_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
-    version = db.get(Version, version_id)
+    version = repo.get_version(db, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
     prev_v, next_v = neighbor_versions(db, version)
@@ -65,15 +67,15 @@ def get_neighbors(
 def create_version(
     node_id: int,
     payload: VersionCreate,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    node = db.get(Node, node_id)
+    node = repo.get_node(db, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     source = None
     if payload.copy_from_version_id:
-        source = db.get(Version, payload.copy_from_version_id)
+        source = repo.get_version(db, payload.copy_from_version_id)
         if not source or source.node_id != node_id:
             raise HTTPException(status_code=400, detail="Invalid source version")
     else:
@@ -82,25 +84,27 @@ def create_version(
         raise HTTPException(status_code=400, detail="No source version to copy")
     version = copy_version(db, node, source, user, label=payload.version_label)
     db.commit()
-    db.refresh(version)
-    return version
+    return repo.get_version(db, version.id) or version
 
 
 @router.patch("/versions/{version_id}", response_model=VersionOut)
 def update_version_meta(
     version_id: int,
     payload: VersionMetaUpdate,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    version = db.get(Version, version_id)
+    version = repo.get_version(db, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
-    node = db.get(Node, version.node_id)
-    if payload.version_label is not None:
-        version.version_label = payload.version_label
-    if payload.version_date is not None:
-        version.version_date = payload.version_date
+    node = repo.get_node(db, version.node_id)
+    if payload.version_label is not None or payload.version_date is not None:
+        repo.update_version_meta(
+            db,
+            version_id,
+            version_label=payload.version_label,
+            version_date=payload.version_date,
+        )
     record_audit(
         db,
         user=user,
@@ -109,21 +113,20 @@ def update_version_meta(
         detail=payload.model_dump(exclude_none=True),
     )
     db.commit()
-    db.refresh(version)
-    return version
+    return repo.get_version(db, version_id) or version
 
 
 @router.delete("/versions/{version_id}", response_model=Message)
 def delete_version(
     version_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    version = db.get(Version, version_id)
+    version = repo.get_version(db, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
-    node = db.get(Node, version.node_id)
-    remaining = db.query(Version).filter(Version.node_id == version.node_id).count()
+    node = repo.get_node(db, version.node_id)
+    remaining = repo.count_versions(db, version.node_id)
     if remaining <= 1:
         raise HTTPException(status_code=400, detail="Cannot delete the only version")
     record_audit(
@@ -134,7 +137,7 @@ def delete_version(
         detail={"version_id": version_id, "label": version.version_label},
     )
     storage.delete_version_storage(version.node_id, version.id)
-    db.delete(version)
+    repo.delete_version(db, version_id)
     db.commit()
     return Message(message="Version deleted")
 
@@ -144,10 +147,10 @@ async def import_version(
     node_id: int,
     file: UploadFile = File(...),
     version_label: str | None = Form(None),
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     user: User = Depends(require_roles("admin", "editor")),
 ):
-    node = db.get(Node, node_id)
+    node = repo.get_node(db, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     version = import_file(
@@ -160,17 +163,16 @@ async def import_version(
         content_type=file.content_type,
     )
     db.commit()
-    db.refresh(version)
-    return version
+    return repo.get_version(db, version.id) or version
 
 
 @router.get("/versions/{version_id}/export")
 def export_version(
     version_id: int,
-    db: Session = Depends(get_db),
+    db: sqlite3.Connection = Depends(get_db),
     _: User = Depends(require_user),
 ):
-    version = db.get(Version, version_id)
+    version = repo.get_version(db, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
     path = storage.resolve_storage_path(version.storage_path)

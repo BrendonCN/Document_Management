@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Optional
 
-from sqlalchemy.orm import Session
-
-from app.models import Node, User, Version
+from app import repo
+from app.models import Node, User
 from app.schemas import NodeOut, TreeNodeOut
 from app.services import storage
 from app.services.audit import record_audit
 from app.services.versions import create_empty_version, get_current_version
 
 
-def node_to_out(db: Session, node: Node) -> NodeOut:
+def node_to_out(db: sqlite3.Connection, node: Node) -> NodeOut:
     current = get_current_version(db, node.id)
-    count = db.query(Version).filter(Version.node_id == node.id).count()
+    count = repo.count_versions(db, node.id)
     return NodeOut(
         id=node.id,
         parent_id=node.parent_id,
@@ -28,13 +28,8 @@ def node_to_out(db: Session, node: Node) -> NodeOut:
     )
 
 
-def build_tree(db: Session, parent_id: Optional[int] = None) -> list[TreeNodeOut]:
-    nodes = (
-        db.query(Node)
-        .filter(Node.parent_id == parent_id)
-        .order_by(Node.sort_order.asc(), Node.name.asc())
-        .all()
-    )
+def build_tree(db: sqlite3.Connection, parent_id: Optional[int] = None) -> list[TreeNodeOut]:
+    nodes = repo.list_children(db, parent_id)
     result: list[TreeNodeOut] = []
     for node in nodes:
         base = node_to_out(db, node)
@@ -45,7 +40,7 @@ def build_tree(db: Session, parent_id: Optional[int] = None) -> list[TreeNodeOut
 
 
 def create_node(
-    db: Session,
+    db: sqlite3.Connection,
     user: User,
     *,
     name: str,
@@ -53,26 +48,21 @@ def create_node(
     parent_id: Optional[int] = None,
 ) -> Node:
     if parent_id is not None:
-        parent = db.get(Node, parent_id)
+        parent = repo.get_node(db, parent_id)
         if parent is None:
             raise ValueError("Parent node not found")
 
-    siblings = db.query(Node).filter(Node.parent_id == parent_id).count()
-    node = Node(
+    siblings = repo.count_children(db, parent_id)
+    node = repo.insert_node(
+        db,
         parent_id=parent_id,
         name=name.strip(),
         kind=kind,
         created_by=user.id,
         sort_order=siblings,
     )
-    db.add(node)
-    db.flush()
 
-    if kind != "folder":
-        create_empty_version(db, node, user)
-    else:
-        # folders may still hold a placeholder version for export uniformity
-        create_empty_version(db, node, user)
+    create_empty_version(db, node, user)
 
     record_audit(
         db,
@@ -82,13 +72,15 @@ def create_node(
         detail={"kind": kind, "name": name},
     )
     db.commit()
-    db.refresh(node)
-    return node
+    refreshed = repo.get_node(db, node.id)
+    return refreshed or node
 
 
-def rename_node(db: Session, user: User, node: Node, name: str) -> Node:
+def rename_node(db: sqlite3.Connection, user: User, node: Node, name: str) -> Node:
     old = node.name
-    node.name = name.strip()
+    new_name = name.strip()
+    repo.update_node_name(db, node.id, new_name)
+    node = repo.get_node(db, node.id) or node
     record_audit(
         db,
         user=user,
@@ -97,12 +89,11 @@ def rename_node(db: Session, user: User, node: Node, name: str) -> Node:
         detail={"from": old, "to": node.name},
     )
     db.commit()
-    db.refresh(node)
-    return node
+    return repo.get_node(db, node.id) or node
 
 
 def move_node(
-    db: Session,
+    db: sqlite3.Connection,
     user: User,
     node: Node,
     *,
@@ -112,18 +103,17 @@ def move_node(
     if parent_id == node.id:
         raise ValueError("Cannot move a node under itself")
     if parent_id is not None:
-        # prevent cycles
-        current = db.get(Node, parent_id)
+        current = repo.get_node(db, parent_id)
         while current is not None:
             if current.id == node.id:
                 raise ValueError("Cannot move a node under its descendant")
-            current = db.get(Node, current.parent_id) if current.parent_id else None
-        if db.get(Node, parent_id) is None:
+            current = repo.get_node(db, current.parent_id) if current.parent_id else None
+        if repo.get_node(db, parent_id) is None:
             raise ValueError("Parent not found")
 
     old_parent = node.parent_id
-    node.parent_id = parent_id
-    node.sort_order = sort_order
+    repo.update_node_placement(db, node.id, parent_id=parent_id, sort_order=sort_order)
+    node = repo.get_node(db, node.id) or node
     record_audit(
         db,
         user=user,
@@ -132,11 +122,10 @@ def move_node(
         detail={"from_parent": old_parent, "to_parent": parent_id, "sort_order": sort_order},
     )
     db.commit()
-    db.refresh(node)
-    return node
+    return repo.get_node(db, node.id) or node
 
 
-def delete_node(db: Session, user: User, node: Node) -> None:
+def delete_node(db: sqlite3.Connection, user: User, node: Node) -> None:
     node_id = node.id
     record_audit(
         db,
@@ -146,17 +135,10 @@ def delete_node(db: Session, user: User, node: Node) -> None:
         detail={"name": node.name, "kind": node.kind},
     )
     storage.delete_node_storage(node_id)
-    db.delete(node)
+    repo.delete_node(db, node_id)
     db.commit()
 
 
-def search_nodes(db: Session, query: str) -> list[NodeOut]:
-    q = f"%{query.strip()}%"
-    nodes = (
-        db.query(Node)
-        .filter(Node.name.ilike(q))
-        .order_by(Node.name.asc())
-        .limit(50)
-        .all()
-    )
+def search_nodes(db: sqlite3.Connection, query: str) -> list[NodeOut]:
+    nodes = repo.search_nodes(db, query)
     return [node_to_out(db, n) for n in nodes]

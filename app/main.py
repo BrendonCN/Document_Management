@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
 
 from app.api import api_router
 from app.auth.deps import get_current_user
@@ -43,7 +43,7 @@ def login_page(
 
 
 @app.post("/login")
-async def login_form(request: Request, db: Session = Depends(get_db)):
+async def login_form(request: Request, db: sqlite3.Connection = Depends(get_db)):
     form = await request.form()
     username = str(form.get("username") or "").strip()
     role = str(form.get("role") or "").strip() or None
@@ -80,7 +80,7 @@ async def login_form(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/logout")
-def logout(request: Request, db: Session = Depends(get_db)):
+def logout(request: Request, db: sqlite3.Connection = Depends(get_db)):
     session_id = request.cookies.get(SESSION_COOKIE)
     if session_id:
         get_auth_provider().logout(db, session_id)
